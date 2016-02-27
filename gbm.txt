@@ -1,0 +1,12 @@
+FunctionGBM = function(train, newtrain, test, test_pred, train_pred, best, cv, iter, LR){
+     boosting = gbm(target~.,distribution='adaboost', cv.folds=cv, data=train, n.trees=iter,bag.fraction = 0.5,shrinkage=LR) 
+     n = gbm.perf(boosting, method="cv")
+     mytrain1 = predict(boosting,newtrain,type='response',n.trees = n)
+     train_pred = cbind(train_pred,mytrain1)
+     mytest1 = predict(boosting,test,type='response',n.trees = n)
+     test_pred = cbind(test_pred,mytest1)
+     best = c(best,n)
+     return(list(test_pred,train_pred,best))
+}
+
+

@@ -1,0 +1,163 @@
+library(gbm)
+library(randomForest)
+library(readr)
+library(dplyr)
+library('glmnet')
+library(stringdist)
+source('gbm.R')
+
+
+rm(list = ls())
+for(i in 1:15){
+  name = paste0('train',i)
+  assign(name,data.frame())
+  assign(name, read.csv('train.csv', nrows = 10000, skip = 10000*(i-1)), envir = .GlobalEnv)
+}
+train = read.csv('train.csv')
+test = read.csv('test.csv')
+save(train,file = 'train.Rdata')
+save(test, file='test.Rdata')
+load('train.Rdata')
+load('test.Rdata')
+
+train = train[,-which(colnames(train)=='VAR_0227')]
+id = NULL
+for(i in 1:ncol(train)){
+  if(sum(is.na(train[,i])) != nrow(train)){
+    if(sd(train[,i],na.rm=TRUE) < 0.0005){
+      id = c(id,i)
+    }
+    print(i)
+  }
+  else{id = c(id,i)}
+}
+train = train[,-id]
+test = test[,-id]
+
+
+
+##############################################################################
+##### Fix-up city name
+##############################################################################
+cat("Nr of city names before cleanup:", length(unique(train$VAR_0200)), fill=T)
+
+reviewDupes <- mutate(train, City = VAR_0200, State = VAR_0237, Zip=VAR_0241) %>% 
+  select(City, State, Zip) %>%
+  mutate(stateZip = paste(Zip, State, sep="_"),
+         fullGeoID = paste(City, Zip, State, sep="_")) %>%
+  distinct()
+potentialDupes <- group_by(reviewDupes, stateZip) %>% 
+  dplyr::summarise(n = n(), 
+                   altName = first(City), # prettier: most common
+                   altID = first(fullGeoID)) %>% 
+  filter(n > 1)
+dupes <- mutate(left_join(potentialDupes, reviewDupes, by="stateZip"), 
+                dist=stringdist(altName, City)) %>% 
+  filter(dist >= 1 & dist <= 2)
+
+write_csv(select(dupes, City, State, Zip, altName), "CleanedupCities.csv")
+
+print("Preview:")
+print(head(paste(dupes$City, dupes$State, "=>", dupes$altName), 20))
+
+train <- mutate(train, fullGeoID = paste(VAR_0200, VAR_0241, VAR_0237, sep="_"))
+train <- left_join(train, select(dupes, altName, fullGeoID), by="fullGeoID") %>%
+  mutate(VAR_0200 = ifelse(is.na(altName), VAR_0200, altName)) %>%
+  select(-fullGeoID, -altName)
+test <- mutate(test, fullGeoID = paste(VAR_0200, VAR_0241, VAR_0237, sep="_"))
+test <- left_join(test, select(dupes, altName, fullGeoID), by="fullGeoID") %>%
+  mutate(VAR_0200 = ifelse(is.na(altName), VAR_0200, altName)) %>%
+  select(-fullGeoID, -altName)
+# and do the same for the test set
+
+cat("Nr of city names after cleansing:", length(unique(train$VAR_0200)), fill=T)
+
+##############################################################################
+##### Deal with missing value
+##############################################################################
+train[is.na(train)] <- -9999
+test[is.na(test)] <- -9999
+
+##############################################################################
+##### Fix-up date
+##############################################################################
+levels = NULL
+for(i in 1:ncol(train)){
+  levels = c(levels,length(levels(train[,i])))
+}
+levels = which(levels > 500)
+data = matrix(0,nrow = nrow(train))
+data = data.frame(data)
+date = function(data,input){
+  data$VAR_0073_1 = as.vector(substr(input[,levels[1]],1,2))
+  data$VAR_0073_2 = substr(input[,levels[1]],3,7)
+  data$VAR_0073_3 = substr(input[,levels[1]],9,16)
+  data$VAR_0075_1 = substr(input[,levels[2]],1,2)
+  data$VAR_0075_2 = substr(input[,levels[2]],3,7)
+  data$VAR_0075_3 = substr(input[,levels[2]],9,16)
+  data$VAR_0156_1 = substr(input[,levels[3]],1,2)
+  data$VAR_0156_2 = substr(input[,levels[3]],3,7)
+  data$VAR_0156_3 = substr(input[,levels[3]],9,16)
+  data$VAR_0159_1 = substr(input[,levels[4]],1,2)
+  data$VAR_0159_2 = substr(input[,levels[4]],3,7)
+  data$VAR_0159_3 = substr(input[,levels[4]],9,16)
+  data$VAR_0166_1 = substr(input[,levels[5]],1,2)
+  data$VAR_0166_2 = substr(input[,levels[5]],3,7)
+  data$VAR_0166_3 = substr(input[,levels[5]],9,16)
+  data$VAR_0167_1 = substr(input[,levels[6]],1,2)
+  data$VAR_0167_2 = substr(input[,levels[6]],3,7)
+  data$VAR_0167_3 = substr(input[,levels[6]],9,16)
+  data$VAR_0168_1 = substr(input[,levels[7]],1,2)
+  data$VAR_0168_2 = substr(input[,levels[7]],3,7)
+  data$VAR_0168_3 = substr(input[,levels[7]],9,16)
+  data$VAR_0169_1 = substr(input[,levels[8]],1,2)
+  data$VAR_0169_2 = substr(input[,levels[8]],3,7)
+  data$VAR_0169_3 = substr(input[,levels[8]],9,16)
+  data$VAR_0176_1 = substr(input[,levels[9]],1,2)
+  data$VAR_0176_2 = substr(input[,levels[9]],3,7)
+  data$VAR_0176_3 = substr(input[,levels[9]],9,16)
+  data$VAR_0177_1 = substr(input[,levels[10]],1,2)
+  data$VAR_0177_2 = substr(input[,levels[10]],3,7)
+  data$VAR_0177_3 = substr(input[,levels[10]],9,16)
+  data$VAR_0178_1 = substr(input[,levels[11]],1,2)
+  data$VAR_0178_2 = substr(input[,levels[11]],3,7)
+  data$VAR_0178_3 = substr(input[,levels[11]],9,16)
+  data$VAR_0179_1 = substr(input[,levels[12]],1,2)
+  data$VAR_0179_2 = substr(input[,levels[12]],3,7)
+  data$VAR_0179_3 = substr(input[,levels[12]],9,16)
+  data$VAR_0204_1 = substr(input[,levels[13]],1,2)
+  data$VAR_0204_2 = substr(input[,levels[13]],3,7)
+  data$VAR_0204_3 = substr(input[,levels[13]],9,16)
+  data = data[,-1]
+}
+mydata_train = date(data,train)
+mydata_train = apply(mydata_train,2,as.factor)
+mytrain = train[,-levels[1:13]]
+mytrain = cbind(mytrain,mydata_train)
+data = matrix(0,nrow = nrow(test))
+data = data.frame(data)
+mydata_test = date(data,test)
+mytest = test[,-levels[1:13]]
+mytest = cbind(mytest,mydata_test)
+levels = NULL
+for(i in 1:ncol(mytrain)){
+  levels = c(levels,length(levels(mytrain[,i])))
+}
+levels = which(levels > 1024)
+frquency = sort(table(mytrain[,357]),decreasing = TRUE)
+remain = names(frquency[1:1022])
+mytrain[,357] = as.character(mytrain[,357])
+mytrain[which(!mytrain[,357] %in% remain  & !is.na(mytrain[,357])),357] = -9999
+mytrain[,357] = as.factor(mytrain[,357])
+mytest[,357] = as.character(mytest[,357])
+mytest[which(!mytest[,357] %in% remain  & !is.na(mytest[,357])),357] = -9999
+mytest[,357] = as.factor(mytest[,357])
+levels = NULL
+for(i in 1:ncol(mytrain)){
+  levels = c(levels,length(levels(mytrain[,i])))
+}
+levels = which(levels > 1024)
+
+save(mytrain,file = 'mytrain.Rdata')
+save(mytest,file = 'mytest.Rdata')
+

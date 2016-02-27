@@ -1,0 +1,141 @@
+library(readr)
+library(xgboost)
+library(caret)
+require(pROC)
+
+train=read_csv("/Users/daiyu/Desktop/542 project/train.csv")
+test=read_csv("/Users/daiyu/Desktop/542 project/test.csv")
+
+# check variable names
+
+GAM_BOOT_ITERS=20
+
+dim(train)
+dim(test)
+head(colnames(train))
+tail(colnames(train))
+target=train$target
+test.ID=test$ID
+
+# remove VAR_0227 and because of duplication
+train=train[,-227]
+test=test[,-227]
+
+# interpreted by the forum, 241 is postal code, 254 is age
+head(train[,240])
+head(train[,])
+# remove ID and target
+train=train[,-c(1,1934)]
+test=test[,-1]
+
+# code categorical variables as numerical variables in order to use XGBoost
+feature.names=names(train)
+for (f in feature.names) {
+  if (class(train[[f]])=="character") {
+    levels=unique(c(train[[f]], test[[f]]))
+    train[[f]]=as.integer(factor(train[[f]], levels=levels))
+    test[[f]]=as.integer(factor(test[[f]],  levels=levels))
+  }
+}
+
+# remove columns with nearly 0 variance
+ZeroVar=function(dat){
+  out=lapply(dat, function(x) length(unique(x)))
+  want=which(!out>1)
+  unlist(want)
+}
+
+test=test[,-ZeroVar(train)]
+train=train[,-ZeroVar(train)]
+
+# replacing missing values with -1
+train[is.na(train)]=-1
+test[is.na(test)]=-1
+
+inTrain=sample(nrow(train), 0.7*nrow(train))
+y.train=target[inTrain]
+x.train=xgb.DMatrix(data.matrix(train[inTrain, ]), label=y.train)
+
+y.test=target[-inTrain]
+x.test=xgb.DMatrix(data.matrix(train[-inTrain, ]), label=y.test)
+
+# function for easily changing the parameter list
+param.change=function(paramlist, new.eta, new.subsample, new.max_depth){
+  num=length(paramlist) + 1
+  paramlist[[num]]=paramlist[[1]]
+  paramlist[[num]]$eta=new.eta
+  paramlist[[num]]$subsample=new.subsample
+  paramlist[[num]]$max_depth=new.max_depth
+  paramlist
+}
+
+xg.params=list(
+  "objective"  = "binary:logistic",
+  "eval_metric" = "auc",
+  "eta" = 0.03,
+  "subsample" = 0.7,
+  "colsample_bytree" = 0.8,
+  "max_depth" = 6
+)
+
+param.list=list(xg.params)
+param.list=param.change(param.list, 0.05, 0.5, 8)
+param.list=param.change(param.list, 0.2, 0.8, 4)
+param.list=param.change(param.list, 0.03, 0.7, 8)
+param.list=param.change(param.list, 0.3, 0.65, 2)
+
+submission=data.frame(ID=test.ID)
+val=data.frame(obs.= y.test)
+
+# training a XGBoost classifier
+for (idx in seq_along(param.list)){
+  clf=xgb.train(params=param.list[[idx]],
+                data=x.train,
+                nrounds=180,
+                watchlist=list(validation=x.test),
+                print.every.n=5,
+                maximize=TRUE,
+                early.stop.round=10)
+  
+  # making predictions in batches due to 8GB memory limitation
+  submission$target.boost=NA
+  for (rows in split(1:nrow(test), ceiling((1:nrow(test))/10000))) {
+    submission[rows, "target.boost"]=predict(clf, data.matrix(test[rows, ]))
+  }
+
+  val$target.boost=predict(clf, x.test)  
+  
+  pred.col.name=paste0('target.boost', idx)
+  names(submission)[ncol(submission)]=pred.col.name
+  names(val)[ncol(val)]=pred.col.name
+  
+}
+
+gam.grid=expand.grid(select=c(FALSE), method=c('GCV.Cp'))
+
+ctrl=trainControl(method='boot',
+                  number=GAM_BOOT_ITERS,
+                  summaryFunction=twoClassSummary,
+                  verboseIter=TRUE,
+                  classProbs=TRUE)
+
+gam.train=train(factor(obs., 1:0, c('positive', 'negative')) ~ .,
+                data=val, 
+                method='gam',
+                trControl=ctrl, 
+                tuneGrid=gam.grid,
+                metric='ROC')
+print(gam.train)
+
+submission[, 'target']=predict(gam.train, newdata=submission, type='prob')[, 2]
+submission=submission[, c("ID", "target")]
+
+
+# saving the submission file
+write_csv(submission, "xgboost_submission.csv")
+
+# feature importance
+names=colnames(train)
+importance_matrix=xgb.importance(names,model=clf)
+xgb.plot.importance(importance_matrix[1:10,])
+

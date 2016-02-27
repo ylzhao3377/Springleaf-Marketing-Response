@@ -1,0 +1,71 @@
+rm(list = ls())
+library(gbm)
+library(randomForest)
+library(readr)
+library(dplyr)
+library(sgd)
+library(rpart)
+library(stringdist)
+library(rmarkdown)
+source('gbm.R')
+
+### Load data and separate training data into 4 subsets
+
+load('mytrain.Rdata')
+load('mytest.Rdata')
+newtrain = mytrain[,-1]
+newtest = mytest[,-1]
+n = round(nrow(newtrain)/4)
+for(i in 1:4){
+  name = paste0('mytrain',i)
+  assign(name, newtrain[(n*(i-1)+1):(n*i),])
+}
+
+datalist = list(mytrain1,mytrain2,mytrain3,mytrain4)
+
+
+
+#### Implement GBM algorithm and record the prediction in train_pred and test_pred
+test_pred = NULL
+train_pred = NULL
+best = NULL
+par(mfrow= c(1,2))
+cv = 3
+iter = 4000
+LR = 0.001
+for(i in 1:4){
+   prediction = FunctionGBM(datalist[[i]],newtrain,newtest,test_pred,train_pred,best,cv, iter, LR)
+   train_pred = prediction[[2]]
+   test_pred = prediction[[1]]
+   best = prediction[[3]]
+}
+print(head(train_pred))
+print(head(test_pred))
+tmp = apply(test_pred,1,mean)
+final = as.data.frame(tmp)
+print(head(final))
+
+
+### Generate files for submission
+save(prediction,file = 'Ada_pred.Rdata')
+final = cbind(mytest[,1],final)
+colnames(final) = c('ID','target')
+write.csv(final,file = 'Ada_result.csv',row.names=F)
+tmp1 = test_pred[,1]
+tmp1 = cbind(as.character(mytest[,1]),tmp1)
+colnames(tmp1) = c('ID','target')
+write.csv(tmp1,file = 'Ada_result1.csv',row.names=F)
+tmp2 = test_pred[,2]
+tmp2 = cbind(as.character(mytest[,1]),tmp2)
+colnames(tmp2) = c('ID','target')
+write.csv(tmp2,file = 'Ada_result2.csv',row.names=F)
+tmp3 = test_pred[,3]
+tmp3 = cbind(as.character(mytest[,1]),tmp3)
+colnames(tmp3) = c('ID','target')
+write.csv(tmp3,file = 'Ada_result3.csv',row.names=F)
+tmp4 = test_pred[,4]
+tmp4 = cbind(as.character(mytest[,1]),tmp4)
+colnames(tmp4) = c('ID','target')
+write.csv(tmp4,file = 'Ada_result4.csv',row.names=F)
+
+
